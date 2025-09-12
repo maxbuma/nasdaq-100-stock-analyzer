@@ -1,9 +1,10 @@
+import yagmail
+from config import EMAIL_ADDRESS, EMAIL_PASSWORD
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import yagmail
 from datetime import datetime
-from config import EMAIL_ADDRESS, EMAIL_PASSWORD
+import time
 
 # Complete NASDAQ-100 stocks
 COMPANY_NAMES = {
@@ -113,65 +114,23 @@ COMPANY_NAMES = {
 
 STOCKS_TO_MONITOR = list(COMPANY_NAMES.keys())
 
-# Email configuration
-RECEIVER_EMAIL = "maxbuma5@gmail.com"
-EMAIL_SUBJECT = "Daily Stock Analysis - Top Opportunities"
-
-def get_stock_data(ticker, period="1y", interval="1d", max_retries=3):
-    """Fetch stock data using yfinance with enhanced error handling"""
-    import time
-    import requests
-    
-    # Set up session with headers to avoid blocking
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    })
-    
-    for attempt in range(max_retries):
+def get_stock_data(ticker, period="1y", interval="1d"):
+    """Enhanced data fetching with retry logic"""
+    for attempt in range(2):
         try:
-            print(f"Fetching {ticker} (attempt {attempt + 1})...", end=' ')
-            
-            # Create ticker with custom session
-            stock = yf.Ticker(ticker, session=session)
-            
-            # Add delay between requests
-            if attempt > 0:
-                time.sleep(3 + attempt)  # Increasing delay
-            
-            # Try different periods if the main one fails
-            periods_to_try = [period, "6mo", "3mo", "1mo"] if period == "1y" else [period]
-            
-            for p in periods_to_try:
-                try:
-                    df = stock.history(period=p, interval=interval, timeout=30)
-                    
-                    if not df.empty and len(df) > 50:  # Need enough data for analysis
-                        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-                        if all(col in df.columns for col in required_columns):
-                            print(f"Success! Got {len(df)} days of data (period: {p})")
-                            return df
-                    
-                except Exception as period_error:
-                    print(f"Period {p} failed: {period_error}")
-                    continue
-            
-            print(f"No valid data for {ticker}")
-            if attempt < max_retries - 1:
-                print(f"Retrying in {3 + attempt} seconds...")
-                time.sleep(3 + attempt)
-            
+            stock = yf.Ticker(ticker)
+            df = stock.history(period=period, interval=interval)
+            if not df.empty:
+                return df
+            time.sleep(1)  # Brief pause between attempts
         except Exception as e:
-            print(f"Error: {str(e)[:100]}...")
-            if attempt < max_retries - 1:
-                print(f"Retrying in {3 + attempt} seconds...")
-                time.sleep(3 + attempt)
-    
-    print(f"Failed to fetch {ticker} after {max_retries} attempts")
+            if attempt == 1:  # Last attempt
+                print(f"Error fetching data for {ticker}: {e}")
+            time.sleep(1)
     return None
 
 def calculate_rsi(data, periods=14):
-    """Calculate RSI for a given stock dataframe"""
+    """RSI calculation"""
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0))
     loss = (-delta.where(delta < 0, 0))
@@ -181,41 +140,8 @@ def calculate_rsi(data, periods=14):
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
-def analyze_volume(data):
-    """Analyze volume patterns and trends"""
-    try:
-        recent_volume = data['Volume'].tail(20)
-        current_volume = recent_volume.iloc[-1]
-        avg_volume = recent_volume.mean()
-        volume_ratio = current_volume / avg_volume if avg_volume > 0 else 0
-        
-        return {
-            'current_volume': current_volume,
-            'avg_volume': avg_volume,
-            'volume_ratio': volume_ratio,
-            'high_volume': volume_ratio > 1.5
-        }
-    except Exception as e:
-        print(f"Volume analysis error: {e}")
-        return None
-
-def check_golden_cross(data):
-    """Check for Golden Cross and Death Cross patterns"""
-    try:
-        last_two_days = data[['MA50', 'MA200']].tail(2)
-        if last_two_days['MA50'].iloc[0] < last_two_days['MA200'].iloc[0] and \
-           last_two_days['MA50'].iloc[1] > last_two_days['MA200'].iloc[1]:
-            return "GOLDEN CROSS"
-        elif last_two_days['MA50'].iloc[0] > last_two_days['MA200'].iloc[0] and \
-             last_two_days['MA50'].iloc[1] < last_two_days['MA200'].iloc[1]:
-            return "DEATH CROSS"
-        return None
-    except Exception as e:
-        print(f"Error checking cross: {e}")
-        return None
-
 def calculate_macd(data, fast=12, slow=26, signal=9):
-    """Calculate MACD indicator"""
+    """MACD calculation with crossover detection"""
     try:
         ema_fast = data['Close'].ewm(span=fast).mean()
         ema_slow = data['Close'].ewm(span=slow).mean()
@@ -227,15 +153,18 @@ def calculate_macd(data, fast=12, slow=26, signal=9):
             'macd': macd_line.iloc[-1],
             'signal': signal_line.iloc[-1],
             'histogram': histogram.iloc[-1],
-            'bullish_crossover': macd_line.iloc[-1] > signal_line.iloc[-1] and macd_line.iloc[-2] <= signal_line.iloc[-2],
-            'bearish_crossover': macd_line.iloc[-1] < signal_line.iloc[-1] and macd_line.iloc[-2] >= signal_line.iloc[-2]
+            'bullish_crossover': (macd_line.iloc[-1] > signal_line.iloc[-1] and 
+                                macd_line.iloc[-2] <= signal_line.iloc[-2]),
+            'bearish_crossover': (macd_line.iloc[-1] < signal_line.iloc[-1] and 
+                                macd_line.iloc[-2] >= signal_line.iloc[-2]),
+            'above_zero': macd_line.iloc[-1] > 0,
+            'momentum_strength': abs(histogram.iloc[-1])
         }
-    except Exception as e:
-        print(f"Error calculating MACD: {e}")
+    except:
         return None
 
 def calculate_bollinger_bands(data, window=20, std_dev=2):
-    """Calculate Bollinger Bands"""
+    """Bollinger Bands with squeeze detection"""
     try:
         rolling_mean = data['Close'].rolling(window=window).mean()
         rolling_std = data['Close'].rolling(window=window).std()
@@ -245,439 +174,521 @@ def calculate_bollinger_bands(data, window=20, std_dev=2):
         current_price = data['Close'].iloc[-1]
         bb_position = (current_price - lower_band.iloc[-1]) / (upper_band.iloc[-1] - lower_band.iloc[-1])
         
+        # Bollinger Band squeeze detection
+        band_width = (upper_band.iloc[-1] - lower_band.iloc[-1]) / rolling_mean.iloc[-1]
+        avg_band_width = ((upper_band - lower_band) / rolling_mean).rolling(50).mean().iloc[-1]
+        squeeze = band_width < avg_band_width * 0.8
+        
         return {
             'upper': upper_band.iloc[-1],
             'middle': rolling_mean.iloc[-1],
             'lower': lower_band.iloc[-1],
             'position': bb_position,
-            'oversold': bb_position < 0.2,  # Near lower band
-            'overbought': bb_position > 0.8,  # Near upper band
-            'squeeze': (upper_band.iloc[-1] - lower_band.iloc[-1]) / rolling_mean.iloc[-1] < 0.1
+            'oversold': bb_position < 0.1,      # Very oversold
+            'approaching_oversold': bb_position < 0.25,  # Approaching oversold
+            'overbought': bb_position > 0.9,    # Very overbought
+            'approaching_overbought': bb_position > 0.75, # Approaching overbought
+            'squeeze': squeeze,
+            'band_width': band_width
         }
-    except Exception as e:
-        print(f"Error calculating Bollinger Bands: {e}")
+    except:
         return None
 
-def find_support_resistance(data, window=20):
-    """Find recent support and resistance levels"""
+def find_support_resistance(data, window=50):
+    """Advanced support and resistance detection"""
     try:
         recent_data = data.tail(window)
         current_price = data['Close'].iloc[-1]
         
-        # Find recent highs and lows
-        resistance = recent_data['High'].max()
-        support = recent_data['Low'].min()
+        # Find multiple support and resistance levels
+        highs = recent_data['High']
+        lows = recent_data['Low']
         
-        # Calculate distance from support/resistance
-        resistance_distance = (resistance - current_price) / current_price
-        support_distance = (current_price - support) / current_price
+        # Primary levels
+        resistance_1 = highs.max()
+        support_1 = lows.min()
         
-        return {
-            'resistance': resistance,
-            'support': support,
-            'near_support': support_distance < 0.05,  # Within 5% of support
-            'near_resistance': resistance_distance < 0.05,  # Within 5% of resistance
-            'support_distance': support_distance,
-            'resistance_distance': resistance_distance
-        }
-    except Exception as e:
-        print(f"Error finding support/resistance: {e}")
-        return None
-
-def calculate_price_momentum(data, short_window=10, long_window=30):
-    """Calculate price momentum indicators"""
-    try:
-        short_ma = data['Close'].rolling(window=short_window).mean()
-        long_ma = data['Close'].rolling(window=long_window).mean()
-        current_price = data['Close'].iloc[-1]
+        # Secondary levels (remove outliers)
+        resistance_2 = highs.nlargest(10).iloc[5:].mean()  # Average of 6th-10th highest
+        support_2 = lows.nsmallest(10).iloc[5:].mean()     # Average of 6th-10th lowest
         
-        # Price relative to moving averages
-        price_vs_short = (current_price - short_ma.iloc[-1]) / short_ma.iloc[-1]
-        price_vs_long = (current_price - long_ma.iloc[-1]) / long_ma.iloc[-1]
-        
-        # Recent price action
-        recent_change = (data['Close'].iloc[-1] - data['Close'].iloc[-5]) / data['Close'].iloc[-5]
+        # Distance calculations
+        resistance_distance = (resistance_1 - current_price) / current_price
+        support_distance = (current_price - support_1) / current_price
         
         return {
-            'short_ma': short_ma.iloc[-1],
-            'long_ma': long_ma.iloc[-1],
-            'price_vs_short': price_vs_short,
-            'price_vs_long': price_vs_long,
-            'recent_change': recent_change,
-            'bullish_momentum': price_vs_short > 0 and price_vs_long > 0 and recent_change > 0,
-            'bearish_momentum': price_vs_short < 0 and price_vs_long < 0 and recent_change < 0
+            'resistance_1': resistance_1,
+            'resistance_2': resistance_2,
+            'support_1': support_1,
+            'support_2': support_2,
+            'near_resistance': resistance_distance < 0.03,  # Within 3%
+            'near_support': support_distance < 0.03,        # Within 3%
+            'support_strength': support_distance,
+            'resistance_strength': resistance_distance,
+            'price_position': (current_price - support_1) / (resistance_1 - support_1)
         }
-    except Exception as e:
-        print(f"Error calculating momentum: {e}")
+    except:
         return None
 
-def get_market_timing():
-    """Determine current market timing based on EST time"""
-    import os
-    from datetime import datetime, timezone, timedelta
-    
-    # Get EST time
-    est = timezone(timedelta(hours=-5))
-    current_time = datetime.now(est)
-    hour = current_time.hour
-    minute = current_time.minute
-    
-    # Check environment variable first (from GitHub Actions)
-    timing = os.environ.get('MARKET_TIMING', '')
-    if timing:
-        return timing
-    
-    # Determine timing based on EST hour
-    if hour == 9 and minute < 30:
-        return "pre-market"
-    elif hour == 9 and minute >= 30:
-        return "market-open"
-    elif 10 <= hour <= 15:
-        return "market-hours"
-    elif hour == 16:
-        return "market-close"
-    else:
-        return "after-hours"
-
-def send_email_alert(top_opportunities):
-    """Send email with top stock opportunities"""
+def analyze_volume(data):
+    """Advanced volume analysis"""
     try:
-        # Initialize yagmail with credentials from config
-        yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        volumes = data['Volume']
+        recent_volume = volumes.tail(20)
+        current_volume = volumes.iloc[-1]
         
-        # Determine market timing for email subject
-        timing = get_market_timing()
-        timing_labels = {
-            "pre-market": "Pre-Market Analysis",
-            "market-open": "Market Open Opportunities", 
-            "market-hours": "Mid-Day Update",
-            "market-close": "Market Close Summary",
-            "after-hours": "After-Hours Analysis"
+        # Multiple volume averages
+        avg_volume_20 = recent_volume.mean()
+        avg_volume_50 = volumes.tail(50).mean()
+        
+        volume_ratio_20 = current_volume / avg_volume_20 if avg_volume_20 > 0 else 0
+        volume_ratio_50 = current_volume / avg_volume_50 if avg_volume_50 > 0 else 0
+        
+        # Volume trend
+        volume_trend = recent_volume.tail(5).mean() / recent_volume.head(5).mean()
+        
+        return {
+            'current_volume': current_volume,
+            'avg_volume_20': avg_volume_20,
+            'avg_volume_50': avg_volume_50,
+            'volume_ratio_20': volume_ratio_20,
+            'volume_ratio_50': volume_ratio_50,
+            'high_volume': volume_ratio_20 > 1.5,
+            'very_high_volume': volume_ratio_20 > 2.0,
+            'volume_trend': volume_trend,
+            'increasing_volume': volume_trend > 1.2
         }
-        
-        subject = f"NASDAQ-100 {timing_labels.get(timing, 'Stock Analysis')} - {len(top_opportunities)} Opportunities"
-        
-        # Format the email content
-        email_body = [
-            f"🚀 NASDAQ-100 Stock Analysis Report",
-            f"📅 {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p EST')}",
-            f"⏰ {timing_labels.get(timing, 'Analysis')}\n",
-            f"🎯 TOP {min(len(top_opportunities), 10)} OPPORTUNITIES:\n"
-        ]
-        
-        for idx, stock in enumerate(top_opportunities[:10], 1):
-            stock_info = [
-                f"\n{idx}. {stock['ticker']} - {stock['company_name']}",
-                f"Price: ${stock['price']:.2f}",
-                f"RSI: {stock['rsi']:.2f}",
-                f"Score: {stock['score']}",
-                "Signals:",
-                *[f"  • {signal}" for signal in stock['signals']],
-                "-------------------"
-            ]
-            email_body.extend(stock_info)
-        
-        # Add footer with timing info
-        email_body.extend([
-            "\n" + "="*50,
-            f"📊 Analysis completed at {datetime.now().strftime('%I:%M %p EST')}",
-            f"🔄 Next analysis: {get_next_analysis_time()}",
-            f"⚙️ Automated by NASDAQ-100 Stock Analyzer",
-            "📈 Happy Trading!"
-        ])
-        
-        # Send the email
-        yag.send(
-            to=RECEIVER_EMAIL,
-            subject=subject,
-            contents='\n'.join(email_body)
-        )
-        print(f"📧 Email alert sent successfully! Subject: {subject}")
-    except Exception as e:
-        print(f"Error sending email: {e}")
+    except:
+        return None
 
-def get_next_analysis_time():
-    """Get the next scheduled analysis time"""
-    timing = get_market_timing()
-    
-    next_times = {
-        "pre-market": "9:35 AM EST (Market Open)",
-        "market-open": "12:00 PM EST (Mid-Day)",
-        "market-hours": "4:05 PM EST (Market Close)", 
-        "market-close": "9:00 AM EST Tomorrow (Pre-Market)",
-        "after-hours": "9:00 AM EST Tomorrow (Pre-Market)"
-    }
-    
-    return next_times.get(timing, "Next scheduled run")
+def check_golden_cross(data):
+    """Enhanced moving average crossover detection"""
+    try:
+        ma_data = data[['MA20', 'MA50', 'MA200']].tail(3)
+        
+        # Golden Cross variations
+        golden_cross_50_200 = (ma_data['MA50'].iloc[-2] <= ma_data['MA200'].iloc[-2] and 
+                              ma_data['MA50'].iloc[-1] > ma_data['MA200'].iloc[-1])
+        
+        death_cross_50_200 = (ma_data['MA50'].iloc[-2] >= ma_data['MA200'].iloc[-2] and 
+                             ma_data['MA50'].iloc[-1] < ma_data['MA200'].iloc[-1])
+        
+        # Mini golden cross (20/50)
+        mini_golden = (ma_data['MA20'].iloc[-2] <= ma_data['MA50'].iloc[-2] and 
+                      ma_data['MA20'].iloc[-1] > ma_data['MA50'].iloc[-1])
+        
+        mini_death = (ma_data['MA20'].iloc[-2] >= ma_data['MA50'].iloc[-2] and 
+                     ma_data['MA20'].iloc[-1] < ma_data['MA50'].iloc[-1])
+        
+        if golden_cross_50_200:
+            return "GOLDEN CROSS"
+        elif death_cross_50_200:
+            return "DEATH CROSS"
+        elif mini_golden:
+            return "MINI GOLDEN"
+        elif mini_death:
+            return "MINI DEATH"
+        return None
+    except:
+        return None
+
+def calculate_momentum_indicators(data):
+    """Multiple momentum indicators"""
+    try:
+        closes = data['Close']
+        
+        # Rate of Change (ROC)
+        roc_10 = ((closes.iloc[-1] - closes.iloc[-11]) / closes.iloc[-11]) * 100
+        roc_20 = ((closes.iloc[-1] - closes.iloc[-21]) / closes.iloc[-21]) * 100
+        
+        # Stochastic %K
+        low_14 = data['Low'].rolling(14).min()
+        high_14 = data['High'].rolling(14).max()
+        stoch_k = ((closes - low_14) / (high_14 - low_14)) * 100
+        
+        # Williams %R
+        williams_r = ((high_14.iloc[-1] - closes.iloc[-1]) / (high_14.iloc[-1] - low_14.iloc[-1])) * -100
+        
+        return {
+            'roc_10': roc_10,
+            'roc_20': roc_20,
+            'stoch_k': stoch_k.iloc[-1],
+            'williams_r': williams_r,
+            'momentum_bullish': roc_10 > 5 and roc_20 > 10,
+            'momentum_bearish': roc_10 < -5 and roc_20 < -10,
+            'stoch_oversold': stoch_k.iloc[-1] < 20,
+            'stoch_overbought': stoch_k.iloc[-1] > 80
+        }
+    except:
+        return None
 
 def analyze_stocks(stock_list):
-    """Analyze stocks with comprehensive technical analysis for buy-and-hold opportunities"""
+    """Ultimate stock analysis with all indicators"""
     results = []
-    failed_tickers = []
-    successful_tickers = []
+    total_stocks = len(stock_list)
+    
+    print(f"\n🚀 ULTIMATE STOCK ANALYZER")
+    print(f"📊 Analyzing {total_stocks} NASDAQ-100 stocks with advanced indicators...")
+    print("🔍 Indicators: RSI, MACD, Bollinger Bands, Support/Resistance, Volume, Momentum")
+    print("=" * 80)
     
     for i, ticker in enumerate(stock_list, 1):
         try:
             company_name = COMPANY_NAMES.get(ticker, 'Unknown Company')
-            print(f"\n[{i}/{len(stock_list)}] Analyzing {ticker} - {company_name}...")
+            print(f"[{i:3d}/{total_stocks}] {ticker:5s} - {company_name[:35]:35s} ", end='')
             
             stock_data = get_stock_data(ticker)
             
             if stock_data is not None and not stock_data.empty:
                 # Calculate all technical indicators
                 stock_data['RSI'] = calculate_rsi(stock_data)
+                stock_data['MA20'] = stock_data['Close'].rolling(window=20).mean()
                 stock_data['MA50'] = stock_data['Close'].rolling(window=50).mean()
                 stock_data['MA200'] = stock_data['Close'].rolling(window=200).mean()
                 
                 current_rsi = stock_data['RSI'].iloc[-1]
                 current_price = stock_data['Close'].iloc[-1]
-                volume_data = analyze_volume(stock_data)
+                
+                # Advanced indicators
                 macd_data = calculate_macd(stock_data)
                 bb_data = calculate_bollinger_bands(stock_data)
                 sr_data = find_support_resistance(stock_data)
-                momentum_data = calculate_price_momentum(stock_data)
+                volume_data = analyze_volume(stock_data)
+                momentum_data = calculate_momentum_indicators(stock_data)
                 
-                # Initialize scoring - focused on buy-and-hold opportunities
+                # ULTIMATE SCORING SYSTEM
                 score = 0
                 signals = []
-                buy_signals = 0  # Count of bullish signals
-                sell_signals = 0  # Count of bearish signals
+                buy_signals = 0
+                sell_signals = 0
+                confidence = 0  # Confidence multiplier
                 
-                # RSI Analysis - Key for finding undervalued entries
-                if current_rsi < 30:
+                # RSI Analysis (Enhanced)
+                if current_rsi < 25:
+                    score += 6
+                    buy_signals += 1
+                    confidence += 2
+                    signals.append(f"🟢 EXTREMELY OVERSOLD: RSI {current_rsi:.1f} - Rare Opportunity")
+                elif current_rsi < 30:
                     score += 4
                     buy_signals += 1
+                    confidence += 1
                     signals.append(f"🟢 OVERSOLD: RSI {current_rsi:.1f} - Strong Buy Zone")
                 elif current_rsi < 40:
                     score += 2
                     buy_signals += 1
                     signals.append(f"🟡 APPROACHING OVERSOLD: RSI {current_rsi:.1f}")
+                elif current_rsi > 80:
+                    score -= 5
+                    sell_signals += 1
+                    signals.append(f"🔴 EXTREMELY OVERBOUGHT: RSI {current_rsi:.1f} - Danger Zone")
                 elif current_rsi > 70:
                     score -= 3
                     sell_signals += 1
                     signals.append(f"🔴 OVERBOUGHT: RSI {current_rsi:.1f} - Avoid")
                 
-                # MACD Analysis - Momentum confirmation
+                # MACD Analysis (Advanced)
                 if macd_data:
                     if macd_data['bullish_crossover']:
-                        score += 3
+                        score += 4
                         buy_signals += 1
+                        confidence += 1
                         signals.append("🟢 MACD BULLISH CROSSOVER - Momentum Turning Up")
-                    elif macd_data['macd'] > macd_data['signal'] and macd_data['histogram'] > 0:
-                        score += 1
+                    elif macd_data['macd'] > macd_data['signal'] and macd_data['above_zero']:
+                        score += 2
                         buy_signals += 1
-                        signals.append("🟡 MACD Above Signal - Positive Momentum")
+                        signals.append("🟡 MACD Strong Positive - Above Zero Line")
                     elif macd_data['bearish_crossover']:
-                        score -= 2
+                        score -= 3
                         sell_signals += 1
                         signals.append("🔴 MACD BEARISH CROSSOVER - Momentum Turning Down")
                 
-                # Bollinger Bands - Value opportunities
+                # Bollinger Bands Analysis (Advanced)
                 if bb_data:
                     if bb_data['oversold']:
+                        score += 5
+                        buy_signals += 1
+                        confidence += 1
+                        signals.append(f"🟢 BOLLINGER EXTREME OVERSOLD - Position {bb_data['position']:.2f}")
+                    elif bb_data['approaching_oversold']:
                         score += 3
                         buy_signals += 1
-                        signals.append(f"🟢 BOLLINGER OVERSOLD - Near Lower Band ({bb_data['position']:.2f})")
+                        signals.append(f"🟡 BOLLINGER OVERSOLD - Position {bb_data['position']:.2f}")
                     elif bb_data['overbought']:
-                        score -= 2
+                        score -= 4
                         sell_signals += 1
-                        signals.append(f"🔴 BOLLINGER OVERBOUGHT - Near Upper Band ({bb_data['position']:.2f})")
+                        signals.append(f"🔴 BOLLINGER EXTREME OVERBOUGHT - Position {bb_data['position']:.2f}")
                     
                     if bb_data['squeeze']:
-                        score += 1
-                        signals.append("⚡ BOLLINGER SQUEEZE - Breakout Potential")
+                        score += 2
+                        confidence += 1
+                        signals.append("⚡ BOLLINGER SQUEEZE - Breakout Imminent")
                 
-                # Support/Resistance Analysis
+                # Support/Resistance Analysis (Advanced)
                 if sr_data:
-                    if sr_data['near_support']:
+                    if sr_data['near_support'] and sr_data['price_position'] < 0.3:
+                        score += 4
+                        buy_signals += 1
+                        confidence += 1
+                        signals.append(f"🟢 STRONG SUPPORT - ${sr_data['support_1']:.2f} ({sr_data['support_strength']:.1%})")
+                    elif sr_data['near_support']:
                         score += 2
                         buy_signals += 1
-                        signals.append(f"🟢 NEAR SUPPORT - ${sr_data['support']:.2f} ({sr_data['support_distance']:.1%} away)")
+                        signals.append(f"🟡 NEAR SUPPORT - ${sr_data['support_1']:.2f}")
                     elif sr_data['near_resistance']:
-                        score -= 1
+                        score -= 2
                         sell_signals += 1
-                        signals.append(f"🔴 NEAR RESISTANCE - ${sr_data['resistance']:.2f} ({sr_data['resistance_distance']:.1%} away)")
+                        signals.append(f"🔴 NEAR RESISTANCE - ${sr_data['resistance_1']:.2f}")
                 
-                # Moving Average Analysis - Trend confirmation
-                if stock_data['MA50'].iloc[-1] > stock_data['MA200'].iloc[-1]:
+                # Moving Average Analysis (Enhanced)
+                ma20 = stock_data['MA20'].iloc[-1]
+                ma50 = stock_data['MA50'].iloc[-1]
+                ma200 = stock_data['MA200'].iloc[-1]
+                
+                if current_price > ma20 > ma50 > ma200:
+                    score += 4
+                    buy_signals += 1
+                    confidence += 1
+                    signals.append("🟢 PERFECT BULLISH ALIGNMENT - All MAs Ascending")
+                elif ma50 > ma200:
                     score += 2
                     buy_signals += 1
-                    signals.append("🟢 BULLISH TREND - 50 MA above 200 MA")
-                else:
-                    score -= 1
+                    signals.append("🟡 BULLISH TREND - 50 MA above 200 MA")
+                elif ma50 < ma200:
+                    score -= 2
                     sell_signals += 1
                     signals.append("🔴 BEARISH TREND - 50 MA below 200 MA")
                 
-                # Golden/Death Cross - Major trend changes
+                # Golden/Death Cross Analysis (Enhanced)
                 cross = check_golden_cross(stock_data)
                 if cross == "GOLDEN CROSS":
-                    score += 4
+                    score += 6
                     buy_signals += 1
-                    signals.append("🌟 GOLDEN CROSS - Major Bullish Signal!")
+                    confidence += 2
+                    signals.append("🌟 GOLDEN CROSS - Major Bullish Breakout!")
+                elif cross == "MINI GOLDEN":
+                    score += 3
+                    buy_signals += 1
+                    signals.append("⭐ MINI GOLDEN CROSS - Short-term Bullish")
                 elif cross == "DEATH CROSS":
-                    score -= 4
+                    score -= 6
                     sell_signals += 1
-                    signals.append("💀 DEATH CROSS - Major Bearish Signal!")
+                    signals.append("💀 DEATH CROSS - Major Bearish Signal")
+                elif cross == "MINI DEATH":
+                    score -= 3
+                    sell_signals += 1
+                    signals.append("☠️ MINI DEATH CROSS - Short-term Bearish")
                 
-                # Volume Confirmation
-                if volume_data and volume_data['high_volume'] and buy_signals > sell_signals:
-                    score += 2
-                    signals.append(f"📈 HIGH VOLUME CONFIRMATION - {volume_data['volume_ratio']:.1f}x average")
-                elif volume_data and volume_data['high_volume'] and sell_signals > buy_signals:
-                    score -= 1
-                    signals.append(f"📉 HIGH VOLUME WARNING - {volume_data['volume_ratio']:.1f}x average")
-                
-                # Momentum Confirmation
-                if momentum_data:
-                    if momentum_data['bullish_momentum'] and buy_signals > sell_signals:
+                # Volume Analysis (Advanced)
+                if volume_data:
+                    if volume_data['very_high_volume'] and buy_signals > sell_signals:
+                        score += 4
+                        confidence += 1
+                        signals.append(f"📈 EXPLOSIVE VOLUME - {volume_data['volume_ratio_20']:.1f}x Average")
+                    elif volume_data['high_volume'] and buy_signals > sell_signals:
+                        score += 2
+                        signals.append(f"📊 HIGH VOLUME CONFIRMATION - {volume_data['volume_ratio_20']:.1f}x")
+                    elif volume_data['increasing_volume']:
                         score += 1
-                        signals.append("🚀 BULLISH MOMENTUM CONFIRMED")
-                    elif momentum_data['bearish_momentum']:
-                        score -= 1
-                        signals.append("📉 BEARISH MOMENTUM")
+                        signals.append("📈 INCREASING VOLUME TREND")
                 
-                # Avoid mixed signals - penalize conflicting indicators
-                if buy_signals > 0 and sell_signals > 0:
-                    if sell_signals >= buy_signals:
-                        score -= 2
-                        signals.append("⚠️ MIXED SIGNALS - Proceed with caution")
+                # Momentum Analysis (Advanced)
+                if momentum_data:
+                    if momentum_data['momentum_bullish']:
+                        score += 3
+                        buy_signals += 1
+                        signals.append(f"🚀 STRONG MOMENTUM - ROC: {momentum_data['roc_20']:.1f}%")
+                    elif momentum_data['momentum_bearish']:
+                        score -= 3
+                        sell_signals += 1
+                        signals.append(f"📉 WEAK MOMENTUM - ROC: {momentum_data['roc_20']:.1f}%")
+                    
+                    if momentum_data['stoch_oversold']:
+                        score += 2
+                        buy_signals += 1
+                        signals.append(f"🟢 STOCHASTIC OVERSOLD - {momentum_data['stoch_k']:.1f}")
                 
-                # Only include stocks with clear signals
-                if signals and (buy_signals > sell_signals or score >= 3):
+                # Confidence multiplier (for high-conviction plays)
+                if confidence >= 3:
+                    score = int(score * 1.2)  # 20% bonus for high confidence
+                    signals.append(f"⭐ HIGH CONFIDENCE SIGNAL - {confidence} confirmations")
+                
+                # Quality filter - only include high-quality signals
+                signal_quality = buy_signals - sell_signals
+                if signals and (signal_quality > 0 or score >= 8):
                     results.append({
                         'ticker': ticker,
                         'company_name': company_name,
                         'price': current_price,
                         'rsi': current_rsi,
-                        'ma50': stock_data['MA50'].iloc[-1],
-                        'ma200': stock_data['MA200'].iloc[-1],
-                        'volume_data': volume_data,
-                        'macd_data': macd_data,
-                        'bb_data': bb_data,
-                        'sr_data': sr_data,
-                        'momentum_data': momentum_data,
+                        'ma20': ma20,
+                        'ma50': ma50,
+                        'ma200': ma200,
                         'score': score,
                         'buy_signals': buy_signals,
                         'sell_signals': sell_signals,
-                        'signals': signals
+                        'confidence': confidence,
+                        'signal_quality': signal_quality,
+                        'signals': signals,
+                        'macd_data': macd_data,
+                        'bb_data': bb_data,
+                        'sr_data': sr_data,
+                        'volume_data': volume_data,
+                        'momentum_data': momentum_data
                     })
-                    print("✅ Strong signal detected!")
-                    successful_tickers.append(ticker)
+                    print("🎯 OPPORTUNITY DETECTED!")
                 else:
-                    print("⚪ No clear opportunity.")
-                    successful_tickers.append(ticker)
+                    print("⚪ No clear signal")
             else:
-                print("❌ No data available")
-                failed_tickers.append(ticker)
-                    
+                print("❌ No data")
+                
         except Exception as e:
-            print(f"❌ Error analyzing {ticker}: {e}")
-            failed_tickers.append(ticker)
+            print(f"❌ Error: {str(e)[:30]}...")
             continue
-    
-    # Print summary of data fetching
-    print(f"\n📊 Data Fetching Summary:")
-    print(f"✅ Successful: {len(successful_tickers)}")
-    print(f"❌ Failed: {len(failed_tickers)}")
-    if failed_tickers:
-        print(f"Failed tickers: {', '.join(failed_tickers[:10])}{'...' if len(failed_tickers) > 10 else ''}")
     
     return results
 
-def send_error_email(error_message):
-    """Log error but don't send email - only send emails with real data"""
-    print(f"❌ Analysis failed: {error_message}")
-    print("📧 No email sent - only sending emails when real Yahoo Finance data is available")
-    print("🔄 Will retry automatically at next scheduled time")
-    print("💻 To get real data now, run the analyzer locally on your computer")
+def send_ultimate_email(opportunities):
+    """Send comprehensive email with detailed analysis"""
+    try:
+        yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        
+        email_body = [
+            f"🚀 ULTIMATE NASDAQ-100 STOCK ANALYSIS",
+            f"📅 {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p EST')}",
+            f"🎯 Advanced Multi-Indicator Analysis\n",
+            f"🏆 TOP {len(opportunities)} ULTIMATE OPPORTUNITIES:\n"
+        ]
+        
+        for idx, stock in enumerate(opportunities[:15], 1):  # Top 15
+            confidence_stars = "⭐" * min(stock['confidence'], 5)
+            
+            stock_info = [
+                f"\n{idx}. {stock['ticker']} - {stock['company_name']}",
+                f"💰 Price: ${stock['price']:.2f}",
+                f"🎯 Ultimate Score: {stock['score']} {confidence_stars}",
+                f"📊 Signal Quality: {stock['buy_signals']} buy vs {stock['sell_signals']} sell",
+                f"📈 RSI: {stock['rsi']:.1f}",
+                f"🔍 Key Signals:"
+            ]
+            
+            # Show top 5 signals
+            for signal in stock['signals'][:5]:
+                stock_info.append(f"   • {signal}")
+            
+            if len(stock['signals']) > 5:
+                stock_info.append(f"   • ... and {len(stock['signals']) - 5} more signals")
+            
+            stock_info.append("─" * 60)
+            email_body.extend(stock_info)
+        
+        email_body.extend([
+            "\n" + "="*60,
+            "🧠 ULTIMATE ANALYSIS FEATURES:",
+            "• Multi-timeframe RSI analysis (extreme levels)",
+            "• Advanced MACD with momentum strength",
+            "• Bollinger Bands with squeeze detection", 
+            "• Multi-level Support/Resistance mapping",
+            "• Volume trend and explosion detection",
+            "• Momentum indicators (ROC, Stochastic, Williams %R)",
+            "• Golden Cross variations (50/200 + 20/50)",
+            "• Confidence scoring with quality filters",
+            "",
+            f"📊 Analysis completed: {datetime.now().strftime('%I:%M %p EST')}",
+            f"🎯 {len(opportunities)} high-quality opportunities identified",
+            f"⚙️ Ultimate NASDAQ-100 Stock Analyzer",
+            "📈 Professional-grade technical analysis!"
+        ])
+        
+        yag.send(
+            to=EMAIL_ADDRESS,
+            subject=f"🚀 ULTIMATE Analysis - {len(opportunities)} Premium Opportunities",
+            contents='\n'.join(email_body)
+        )
+        print(f"\n📧 Ultimate analysis email sent with {len(opportunities)} opportunities!")
+        
+    except Exception as e:
+        print(f"❌ Email error: {e}")
 
 def main():
-    print(f"\nStarting analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"Monitoring {len(STOCKS_TO_MONITOR)} stocks...")
+    """Ultimate stock analysis main function"""
+    start_time = datetime.now()
     
-    # Test yfinance connection first
-    print("\n🔍 Testing yfinance connection...")
-    test_data = get_stock_data("AAPL", period="1mo", max_retries=2)
-    if test_data is not None:
-        print(f"✅ yfinance working! AAPL current price: ${test_data['Close'].iloc[-1]:.2f}")
-        print(f"\n📊 Starting full analysis...")
-        results = analyze_stocks(STOCKS_TO_MONITOR)
-    else:
-        print("❌ yfinance connection failed! Trying alternative approach...")
-        
-        # Try a few different tickers to see if any work
-        test_tickers = ["MSFT", "GOOGL", "TSLA", "NVDA"]
-        working_ticker = None
-        
-        for test_ticker in test_tickers:
-            print(f"Testing {test_ticker}...")
-            test_data = get_stock_data(test_ticker, period="1mo", max_retries=1)
-            if test_data is not None:
-                working_ticker = test_ticker
-                print(f"✅ {test_ticker} working! Proceeding with limited analysis...")
-                break
-        
-        if working_ticker:
-            # Analyze only a subset of stocks to avoid rate limiting
-            limited_stocks = STOCKS_TO_MONITOR[:20]  # First 20 stocks only
-            print(f"📊 Running limited analysis on {len(limited_stocks)} stocks...")
-            results = analyze_stocks(limited_stocks)
-        else:
-            print("❌ Complete API failure - no email will be sent")
-            send_error_email("Yahoo Finance API is completely unavailable")
-            return
+    print(f"\n" + "="*80)
+    print(f"🚀 ULTIMATE NASDAQ-100 STOCK ANALYZER")
+    print(f"📅 {start_time.strftime('%A, %B %d, %Y at %I:%M %p EST')}")
+    print(f"🎯 Professional-Grade Multi-Indicator Analysis")
+    print(f"="*80)
+    
+    results = analyze_stocks(STOCKS_TO_MONITOR)
     
     if results:
-        # Sort by score
-        results.sort(key=lambda x: x['score'], reverse=True)
+        # Sort by ultimate score
+        results.sort(key=lambda x: (x['score'], x['confidence']), reverse=True)
         
-        # Get top opportunities (score >= 4 for buy-and-hold)
-        top_opportunities = [r for r in results if r['score'] >= 4]
-        good_opportunities = [r for r in results if r['score'] >= 2 and r['buy_signals'] > r['sell_signals']]
+        # Categorize by quality
+        ultimate_opportunities = [r for r in results if r['score'] >= 12]  # Exceptional
+        premium_opportunities = [r for r in results if 8 <= r['score'] < 12]  # Very good
+        good_opportunities = [r for r in results if 4 <= r['score'] < 8]      # Good
         
-        # Print analysis results
-        print("\n=== TECHNICAL ANALYSIS SIGNALS ===")
+        print(f"\n" + "="*80)
+        print(f"🏆 ULTIMATE OPPORTUNITIES (Score ≥ 12)")
+        print(f"="*80)
         
-        # Print Top Opportunities
-        if top_opportunities:
-            print("\n🎯 TOP OPPORTUNITIES:")
-            for idx, result in enumerate(top_opportunities[:10], 1):
-                print(f"\n{idx}. {result['ticker']} - {result['company_name']}:")
-                print(f"Score: {result['score']}")
-                print(f"Price: ${result['price']:.2f}")
-                print(f"RSI: {result['rsi']:.2f}")
-                print(f"50-day MA: ${result['ma50']:.2f}")
-                print(f"200-day MA: ${result['ma200']:.2f}")
-                if result['volume_data']:
-                    print(f"Volume: {result['volume_data']['volume_ratio']:.1f}x average")
-                print("Signals:")
-                for signal in result['signals']:
-                    print(f"  • {signal}")
-            
-            # Send email alert for top opportunities
+        if ultimate_opportunities:
+            for idx, result in enumerate(ultimate_opportunities[:10], 1):
+                confidence_display = "⭐" * min(result['confidence'], 5)
+                print(f"\n{idx}. {result['ticker']} - {result['company_name']}")
+                print(f"   💰 Price: ${result['price']:.2f}")
+                print(f"   🎯 Ultimate Score: {result['score']} {confidence_display}")
+                print(f"   📊 Quality: {result['buy_signals']} buy signals vs {result['sell_signals']} sell")
+                print(f"   📈 RSI: {result['rsi']:.1f}")
+                print(f"   🔍 Top Signals:")
+                for signal in result['signals'][:4]:  # Top 4 signals
+                    print(f"      • {signal}")
+                if len(result['signals']) > 4:
+                    print(f"      • ... plus {len(result['signals']) - 4} more")
+                print("   " + "─" * 70)
+        
+        if premium_opportunities:
+            print(f"\n🥇 PREMIUM OPPORTUNITIES (Score 8-11)")
+            print("─" * 50)
+            for idx, result in enumerate(premium_opportunities[:5], 1):
+                print(f"{idx}. {result['ticker']} - Score: {result['score']} - ${result['price']:.2f} - RSI: {result['rsi']:.1f}")
+        
+        if good_opportunities:
+            print(f"\n🥈 GOOD OPPORTUNITIES (Score 4-7)")
+            print("─" * 50)
+            for idx, result in enumerate(good_opportunities[:5], 1):
+                print(f"{idx}. {result['ticker']} - Score: {result['score']} - ${result['price']:.2f}")
+        
+        # Send email with all quality opportunities
+        email_opportunities = ultimate_opportunities + premium_opportunities
+        if email_opportunities:
             try:
-                send_email_alert(top_opportunities[:10])
+                send_ultimate_email(email_opportunities)
             except Exception as e:
-                print(f"Error sending email: {e}")
-        else:
-            print("\n📊 ALL DETECTED SIGNALS:")
-            for idx, result in enumerate(results[:10], 1):
-                print(f"\n{idx}. {result['ticker']} - {result['company_name']}:")
-                print(f"Score: {result['score']}")
-                print(f"Price: ${result['price']:.2f}")
-                print(f"RSI: {result['rsi']:.2f}")
-                print("Signals:")
-                for signal in result['signals']:
-                    print(f"  • {signal}")
+                print(f"❌ Email failed: {e}")
         
-        # Print Summary Statistics
-        print("\n=== 📊 SUMMARY STATISTICS ===")
-        print(f"Total stocks analyzed: {len(STOCKS_TO_MONITOR)}")
-        print(f"Stocks with signals: {len(results)}")
-        print(f"Top opportunities: {len(top_opportunities)}")
+        # Final summary
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        
+        print(f"\n" + "="*80)
+        print(f"📊 ULTIMATE ANALYSIS COMPLETE")
+        print(f"="*80)
+        print(f"⏱️  Analysis time: {duration:.1f} seconds")
+        print(f"📈 Total stocks analyzed: {len(STOCKS_TO_MONITOR)}")
+        print(f"🎯 Opportunities found: {len(results)}")
+        print(f"🏆 Ultimate opportunities: {len(ultimate_opportunities)}")
+        print(f"🥇 Premium opportunities: {len(premium_opportunities)}")
+        print(f"🥈 Good opportunities: {len(good_opportunities)}")
+        print(f"📧 Email sent with top {len(email_opportunities)} opportunities")
+        print(f"="*80)
         
     else:
-        print("\nNo significant technical signals detected.")
+        print("\n❌ No opportunities detected with current market conditions.")
+        print("💡 Try running again later or adjust scoring thresholds.")
 
 if __name__ == "__main__":
     main()

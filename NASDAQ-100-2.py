@@ -118,45 +118,56 @@ RECEIVER_EMAIL = "maxbuma5@gmail.com"
 EMAIL_SUBJECT = "Daily Stock Analysis - Top Opportunities"
 
 def get_stock_data(ticker, period="1y", interval="1d", max_retries=3):
-    """Fetch stock data using yfinance with error handling and retries"""
+    """Fetch stock data using yfinance with enhanced error handling"""
     import time
+    import requests
+    
+    # Set up session with headers to avoid blocking
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    })
     
     for attempt in range(max_retries):
         try:
-            print(f"Fetching data for {ticker} (attempt {attempt + 1})...", end=' ')
-            stock = yf.Ticker(ticker)
+            print(f"Fetching {ticker} (attempt {attempt + 1})...", end=' ')
             
-            # Add a small delay to avoid rate limiting
+            # Create ticker with custom session
+            stock = yf.Ticker(ticker, session=session)
+            
+            # Add delay between requests
             if attempt > 0:
-                time.sleep(2)
+                time.sleep(3 + attempt)  # Increasing delay
             
-            df = stock.history(period=period, interval=interval)
+            # Try different periods if the main one fails
+            periods_to_try = [period, "6mo", "3mo", "1mo"] if period == "1y" else [period]
             
-            if df.empty:
-                print(f"No data returned for {ticker}")
-                if attempt < max_retries - 1:
-                    print(f"Retrying...")
+            for p in periods_to_try:
+                try:
+                    df = stock.history(period=p, interval=interval, timeout=30)
+                    
+                    if not df.empty and len(df) > 50:  # Need enough data for analysis
+                        required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+                        if all(col in df.columns for col in required_columns):
+                            print(f"Success! Got {len(df)} days of data (period: {p})")
+                            return df
+                    
+                except Exception as period_error:
+                    print(f"Period {p} failed: {period_error}")
                     continue
-                return None
             
-            # Validate we have the required columns
-            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in df.columns for col in required_columns):
-                print(f"Missing required columns for {ticker}")
-                return None
-            
-            print(f"Success! Got {len(df)} days of data")
-            return df
+            print(f"No valid data for {ticker}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in {3 + attempt} seconds...")
+                time.sleep(3 + attempt)
             
         except Exception as e:
-            print(f"Error fetching {ticker} (attempt {attempt + 1}): {e}")
+            print(f"Error: {str(e)[:100]}...")
             if attempt < max_retries - 1:
-                print(f"Retrying in 2 seconds...")
-                time.sleep(2)
-            else:
-                print(f"Failed to fetch {ticker} after {max_retries} attempts")
-                return None
+                print(f"Retrying in {3 + attempt} seconds...")
+                time.sleep(3 + attempt)
     
+    print(f"Failed to fetch {ticker} after {max_retries} attempts")
     return None
 
 def calculate_rsi(data, periods=14):
@@ -300,16 +311,58 @@ def calculate_price_momentum(data, short_window=10, long_window=30):
         print(f"Error calculating momentum: {e}")
         return None
 
+def get_market_timing():
+    """Determine current market timing based on EST time"""
+    import os
+    from datetime import datetime, timezone, timedelta
+    
+    # Get EST time
+    est = timezone(timedelta(hours=-5))
+    current_time = datetime.now(est)
+    hour = current_time.hour
+    minute = current_time.minute
+    
+    # Check environment variable first (from GitHub Actions)
+    timing = os.environ.get('MARKET_TIMING', '')
+    if timing:
+        return timing
+    
+    # Determine timing based on EST hour
+    if hour == 9 and minute < 30:
+        return "pre-market"
+    elif hour == 9 and minute >= 30:
+        return "market-open"
+    elif 10 <= hour <= 15:
+        return "market-hours"
+    elif hour == 16:
+        return "market-close"
+    else:
+        return "after-hours"
+
 def send_email_alert(top_opportunities):
     """Send email with top stock opportunities"""
     try:
         # Initialize yagmail with credentials from config
         yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_PASSWORD)
         
+        # Determine market timing for email subject
+        timing = get_market_timing()
+        timing_labels = {
+            "pre-market": "Pre-Market Analysis",
+            "market-open": "Market Open Opportunities", 
+            "market-hours": "Mid-Day Update",
+            "market-close": "Market Close Summary",
+            "after-hours": "After-Hours Analysis"
+        }
+        
+        subject = f"NASDAQ-100 {timing_labels.get(timing, 'Stock Analysis')} - {len(top_opportunities)} Opportunities"
+        
         # Format the email content
         email_body = [
-            f"Stock Analysis Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n",
-            "TOP 10 OPPORTUNITIES:\n"
+            f"🚀 NASDAQ-100 Stock Analysis Report",
+            f"📅 {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p EST')}",
+            f"⏰ {timing_labels.get(timing, 'Analysis')}\n",
+            f"🎯 TOP {min(len(top_opportunities), 10)} OPPORTUNITIES:\n"
         ]
         
         for idx, stock in enumerate(top_opportunities[:10], 1):
@@ -324,15 +377,38 @@ def send_email_alert(top_opportunities):
             ]
             email_body.extend(stock_info)
         
+        # Add footer with timing info
+        email_body.extend([
+            "\n" + "="*50,
+            f"📊 Analysis completed at {datetime.now().strftime('%I:%M %p EST')}",
+            f"🔄 Next analysis: {get_next_analysis_time()}",
+            f"⚙️ Automated by NASDAQ-100 Stock Analyzer",
+            "📈 Happy Trading!"
+        ])
+        
         # Send the email
         yag.send(
             to=RECEIVER_EMAIL,
-            subject=EMAIL_SUBJECT,
+            subject=subject,
             contents='\n'.join(email_body)
         )
-        print("Email alert sent successfully!")
+        print(f"📧 Email alert sent successfully! Subject: {subject}")
     except Exception as e:
         print(f"Error sending email: {e}")
+
+def get_next_analysis_time():
+    """Get the next scheduled analysis time"""
+    timing = get_market_timing()
+    
+    next_times = {
+        "pre-market": "9:35 AM EST (Market Open)",
+        "market-open": "12:00 PM EST (Mid-Day)",
+        "market-hours": "4:05 PM EST (Market Close)", 
+        "market-close": "9:00 AM EST Tomorrow (Pre-Market)",
+        "after-hours": "9:00 AM EST Tomorrow (Pre-Market)"
+    }
+    
+    return next_times.get(timing, "Next scheduled run")
 
 def analyze_stocks(stock_list):
     """Analyze stocks with comprehensive technical analysis for buy-and-hold opportunities"""
@@ -508,21 +584,74 @@ def analyze_stocks(stock_list):
     
     return results
 
+def send_error_email(error_message):
+    """Send email notification about analysis failure"""
+    try:
+        yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_PASSWORD)
+        
+        email_body = f"""
+Stock Analysis Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+⚠️ ANALYSIS FAILED ⚠️
+
+Error: {error_message}
+
+The automated stock analysis encountered an issue and could not complete successfully.
+This is likely due to:
+1. Yahoo Finance API rate limiting
+2. Network connectivity issues
+3. Data provider maintenance
+
+The system will retry during the next scheduled run.
+
+Best regards,
+Your Stock Analyzer
+"""
+        
+        yag.send(
+            to=RECEIVER_EMAIL,
+            subject="Stock Analysis - System Error",
+            contents=email_body
+        )
+        print("Error notification email sent!")
+    except Exception as e:
+        print(f"Failed to send error email: {e}")
+
 def main():
     print(f"\nStarting analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Monitoring {len(STOCKS_TO_MONITOR)} stocks...")
     
     # Test yfinance connection first
     print("\n🔍 Testing yfinance connection...")
-    test_data = get_stock_data("AAPL", period="5d", max_retries=2)
+    test_data = get_stock_data("AAPL", period="1mo", max_retries=2)
     if test_data is not None:
         print(f"✅ yfinance working! AAPL current price: ${test_data['Close'].iloc[-1]:.2f}")
+        print(f"\n📊 Starting full analysis...")
+        results = analyze_stocks(STOCKS_TO_MONITOR)
     else:
-        print("❌ yfinance connection failed! Check network/API status")
-        return
-    
-    print(f"\n📊 Starting full analysis...")
-    results = analyze_stocks(STOCKS_TO_MONITOR)
+        print("❌ yfinance connection failed! Trying alternative approach...")
+        
+        # Try a few different tickers to see if any work
+        test_tickers = ["MSFT", "GOOGL", "TSLA", "NVDA"]
+        working_ticker = None
+        
+        for test_ticker in test_tickers:
+            print(f"Testing {test_ticker}...")
+            test_data = get_stock_data(test_ticker, period="1mo", max_retries=1)
+            if test_data is not None:
+                working_ticker = test_ticker
+                print(f"✅ {test_ticker} working! Proceeding with limited analysis...")
+                break
+        
+        if working_ticker:
+            # Analyze only a subset of stocks to avoid rate limiting
+            limited_stocks = STOCKS_TO_MONITOR[:20]  # First 20 stocks only
+            print(f"📊 Running limited analysis on {len(limited_stocks)} stocks...")
+            results = analyze_stocks(limited_stocks)
+        else:
+            print("❌ Complete API failure - sending error notification")
+            send_error_email("Yahoo Finance API is completely unavailable")
+            return
     
     if results:
         # Sort by score

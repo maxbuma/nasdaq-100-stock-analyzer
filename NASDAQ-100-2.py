@@ -117,18 +117,47 @@ STOCKS_TO_MONITOR = list(COMPANY_NAMES.keys())
 RECEIVER_EMAIL = "maxbuma5@gmail.com"
 EMAIL_SUBJECT = "Daily Stock Analysis - Top Opportunities"
 
-def get_stock_data(ticker, period="1y", interval="1d"):
-    """Fetch stock data using yfinance with error handling"""
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period=period, interval=interval)
-        if df.empty:
-            print(f"No data available for {ticker}")
-            return None
-        return df
-    except Exception as e:
-        print(f"Error fetching data for {ticker}: {e}")
-        return None
+def get_stock_data(ticker, period="1y", interval="1d", max_retries=3):
+    """Fetch stock data using yfinance with error handling and retries"""
+    import time
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"Fetching data for {ticker} (attempt {attempt + 1})...", end=' ')
+            stock = yf.Ticker(ticker)
+            
+            # Add a small delay to avoid rate limiting
+            if attempt > 0:
+                time.sleep(2)
+            
+            df = stock.history(period=period, interval=interval)
+            
+            if df.empty:
+                print(f"No data returned for {ticker}")
+                if attempt < max_retries - 1:
+                    print(f"Retrying...")
+                    continue
+                return None
+            
+            # Validate we have the required columns
+            required_columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            if not all(col in df.columns for col in required_columns):
+                print(f"Missing required columns for {ticker}")
+                return None
+            
+            print(f"Success! Got {len(df)} days of data")
+            return df
+            
+        except Exception as e:
+            print(f"Error fetching {ticker} (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                print(f"Retrying in 2 seconds...")
+                time.sleep(2)
+            else:
+                print(f"Failed to fetch {ticker} after {max_retries} attempts")
+                return None
+    
+    return None
 
 def calculate_rsi(data, periods=14):
     """Calculate RSI for a given stock dataframe"""
@@ -308,11 +337,13 @@ def send_email_alert(top_opportunities):
 def analyze_stocks(stock_list):
     """Analyze stocks with comprehensive technical analysis for buy-and-hold opportunities"""
     results = []
+    failed_tickers = []
+    successful_tickers = []
     
-    for ticker in stock_list:
+    for i, ticker in enumerate(stock_list, 1):
         try:
             company_name = COMPANY_NAMES.get(ticker, 'Unknown Company')
-            print(f"Analyzing {ticker} - {company_name}...", end=' ')
+            print(f"\n[{i}/{len(stock_list)}] Analyzing {ticker} - {company_name}...")
             
             stock_data = get_stock_data(ticker)
             
@@ -454,13 +485,26 @@ def analyze_stocks(stock_list):
                         'sell_signals': sell_signals,
                         'signals': signals
                     })
-                    print("Strong signal detected!")
+                    print("✅ Strong signal detected!")
+                    successful_tickers.append(ticker)
                 else:
-                    print("No clear opportunity.")
+                    print("⚪ No clear opportunity.")
+                    successful_tickers.append(ticker)
+            else:
+                print("❌ No data available")
+                failed_tickers.append(ticker)
                     
         except Exception as e:
-            print(f"Error analyzing {ticker}: {e}")
+            print(f"❌ Error analyzing {ticker}: {e}")
+            failed_tickers.append(ticker)
             continue
+    
+    # Print summary of data fetching
+    print(f"\n📊 Data Fetching Summary:")
+    print(f"✅ Successful: {len(successful_tickers)}")
+    print(f"❌ Failed: {len(failed_tickers)}")
+    if failed_tickers:
+        print(f"Failed tickers: {', '.join(failed_tickers[:10])}{'...' if len(failed_tickers) > 10 else ''}")
     
     return results
 
@@ -468,6 +512,16 @@ def main():
     print(f"\nStarting analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Monitoring {len(STOCKS_TO_MONITOR)} stocks...")
     
+    # Test yfinance connection first
+    print("\n🔍 Testing yfinance connection...")
+    test_data = get_stock_data("AAPL", period="5d", max_retries=2)
+    if test_data is not None:
+        print(f"✅ yfinance working! AAPL current price: ${test_data['Close'].iloc[-1]:.2f}")
+    else:
+        print("❌ yfinance connection failed! Check network/API status")
+        return
+    
+    print(f"\n📊 Starting full analysis...")
     results = analyze_stocks(STOCKS_TO_MONITOR)
     
     if results:

@@ -1,0 +1,41 @@
+name: Daily Stock Analysis
+
+on:
+  schedule:
+    # Run Monday-Friday at 9:30 AM EST (2:30 PM UTC)
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Create config file
+      run: |
+        echo "EMAIL_ADDRESS = '${{ secrets.EMAIL_ADDRESS }}'" > config.py
+        echo "EMAIL_PASSWORD = '${{ secrets.EMAIL_PASSWORD }}'" >> config.py
+    
+    - name: Run stock analysis
+      run: python NASDAQ-100-2.py
+      
+    - name: Upload results
+      uses: actions/upload-artifact@v3
+      if: always()
+      with:
+        name: analysis-results
+        path: |
+          *.log
+          *.txt

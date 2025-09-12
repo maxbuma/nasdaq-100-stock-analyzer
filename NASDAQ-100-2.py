@@ -585,37 +585,11 @@ def analyze_stocks(stock_list):
     return results
 
 def send_error_email(error_message):
-    """Send email notification about analysis failure"""
-    try:
-        yag = yagmail.SMTP(EMAIL_ADDRESS, EMAIL_PASSWORD)
-        
-        email_body = f"""
-Stock Analysis Report - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-⚠️ ANALYSIS FAILED ⚠️
-
-Error: {error_message}
-
-The automated stock analysis encountered an issue and could not complete successfully.
-This is likely due to:
-1. Yahoo Finance API rate limiting
-2. Network connectivity issues
-3. Data provider maintenance
-
-The system will retry during the next scheduled run.
-
-Best regards,
-Your Stock Analyzer
-"""
-        
-        yag.send(
-            to=RECEIVER_EMAIL,
-            subject="Stock Analysis - System Error",
-            contents=email_body
-        )
-        print("Error notification email sent!")
-    except Exception as e:
-        print(f"Failed to send error email: {e}")
+    """Log error but don't send email - only send emails with real data"""
+    print(f"❌ Analysis failed: {error_message}")
+    print("📧 No email sent - only sending emails when real Yahoo Finance data is available")
+    print("🔄 Will retry automatically at next scheduled time")
+    print("💻 To get real data now, run the analyzer locally on your computer")
 
 def main():
     print(f"\nStarting analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -649,7 +623,7 @@ def main():
             print(f"📊 Running limited analysis on {len(limited_stocks)} stocks...")
             results = analyze_stocks(limited_stocks)
         else:
-            print("❌ Complete API failure - sending error notification")
+            print("❌ Complete API failure - no email will be sent")
             send_error_email("Yahoo Finance API is completely unavailable")
             return
     

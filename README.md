@@ -1,10 +1,10 @@
-# 🚀 Ultimate NASDAQ-100 Stock Analyzer
+#  Ultimate NASDAQ-100 Stock Analyzer
 
 **Professional-grade technical analysis tool** that scans all NASDAQ-100 stocks using advanced multi-indicator analysis. Built for serious traders and investors who want institutional-quality stock screening.
 
-## ⭐ **Ultimate Features**
+##  **Ultimate Features**
 
-### 🧠 **Advanced Technical Analysis Suite**
+### **Advanced Technical Analysis Suite**
 - **Enhanced RSI Analysis**: Multi-level detection (extreme oversold <25, oversold <30, overbought >70, extreme >80)
 - **Advanced MACD**: Crossover detection, zero-line analysis, momentum strength measurement
 - **Bollinger Bands Pro**: Squeeze detection, multiple oversold/overbought thresholds, volatility analysis
@@ -14,21 +14,21 @@
 - **Moving Average Matrix**: Perfect alignment detection (20>50>200), multiple crossover patterns
 - **Golden Cross Variations**: Both major (50/200) and mini (20/50) crossover detection
 
-### 🎯 **Ultimate Scoring System**
+### **Ultimate Scoring System**
 - **Confidence-Weighted Scoring**: High-conviction signals get 20% score bonus
 - **Quality Filters**: Only shows clear directional signals (buy signals > sell signals)
 - **Tier Classification**: Ultimate (≥12), Premium (8-11), Good (4-7) opportunity levels
 - **Signal Strength Rating**: Star-based confidence system (⭐⭐⭐⭐⭐)
 - **Multi-Factor Confirmation**: Requires multiple indicator alignment for top scores
 
-### 📊 **Professional Features**
+### **Professional Features**
 - **Complete NASDAQ-100 Coverage**: All 102 stocks analyzed with progress tracking
 - **Real-Time Analysis**: Live data fetching with retry logic for reliability
 - **Comprehensive Reporting**: Detailed email reports with top 15 opportunities
 - **Performance Metrics**: Analysis timing, success rates, and quality statistics
 - **Local Execution**: Run on-demand for fresh analysis anytime
 
-## 🚀 **Quick Start**
+## **Quick Start**
 
 ### **Option 1: Ultimate Local Analysis (Recommended)**
 ```bash
@@ -52,9 +52,9 @@ pip install yfinance pandas numpy yagmail
 3. Add secrets: `EMAIL_ADDRESS` and `EMAIL_PASSWORD`
 4. Runs automatically weekdays at 9:35 AM EST (when Yahoo Finance API allows)
 
-## 📈 **Analysis Tiers**
+## **Analysis Tiers**
 
-### 🏆 **Ultimate Opportunities (Score ≥ 12)**
+### **Ultimate Opportunities (Score ≥ 12)**
 **Exceptional setups with multiple confirmations:**
 - Extreme oversold conditions (RSI < 25)
 - Golden Cross breakouts
@@ -63,7 +63,7 @@ pip install yfinance pandas numpy yagmail
 - High-volume confirmation
 - Multiple momentum confirmations
 
-### 🥇 **Premium Opportunities (Score 8-11)**
+### **Premium Opportunities (Score 8-11)**
 **Very strong signals with good confirmation:**
 - Standard oversold conditions (RSI < 30)
 - MACD bullish crossovers
@@ -71,14 +71,14 @@ pip install yfinance pandas numpy yagmail
 - Bullish trend confirmations
 - Volume trend improvements
 
-### 🥈 **Good Opportunities (Score 4-7)**
+### **Good Opportunities (Score 4-7)**
 **Solid signals worth monitoring:**
 - Approaching oversold levels
 - Positive momentum indicators
 - Moving average support
 - Volume pattern improvements
 
-## 🧮 **Ultimate Scoring Breakdown**
+## **Ultimate Scoring Breakdown**
 
 ### **RSI Analysis**
 - **RSI < 25**: +6 points - 🟢 **Extreme Oversold** (Rare opportunity)
@@ -233,3 +233,4 @@ MIT License - Feel free to use, modify, and distribute!
 **Built with ❤️ for serious traders who demand professional-grade analysis.**
 
 🚀 **Happy Trading!** 📈
+
